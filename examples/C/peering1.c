@@ -16,35 +16,33 @@ int main (int argc, char *argv [])
     printf ("I: preparing broker at %s...\n", self);
     srandom ((unsigned) time (NULL));
 
-    zctx_t *ctx = zctx_new ();
-    
     //  Bind state backend to endpoint
-    void *statebe = zsocket_new (ctx, ZMQ_PUB);
-    zsocket_bind (statebe, "ipc://%s-state.ipc", self);
+    zsock_t *statebe = zsock_new (ZMQ_PUB);
+    zsock_bind (statebe, "ipc://%s-state.ipc", self);
     
     //  Connect statefe to all peers
-    void *statefe = zsocket_new (ctx, ZMQ_SUB);
-    zsocket_set_subscribe (statefe, "");
+    zsock_t *statefe = zsock_new (ZMQ_SUB);
+    zsock_set_subscribe (statefe, "");
     int argn;
     for (argn = 2; argn < argc; argn++) {
         char *peer = argv [argn];
         printf ("I: connecting to state backend at '%s'\n", peer);
-        zsocket_connect (statefe, "ipc://%s-state.ipc", peer);
+        zsock_connect (statefe, "ipc://%s-state.ipc", peer);
     }
     //  .split main loop
     //  The main loop sends out status messages to peers, and collects
-    //  status messages back from peers. The zmq_poll timeout defines
+    //  status messages back from peers. The zpoller timeout defines
     //  our own heartbeat:
+    zpoller_t *poller = zpoller_new (statefe, NULL);
 
     while (true) {
         //  Poll for activity, or 1 second timeout
-        zmq_pollitem_t items [] = { { statefe, 0, ZMQ_POLLIN, 0 } };
-        int rc = zmq_poll (items, 1, 1000 * ZMQ_POLL_MSEC);
-        if (rc == -1)
+        zsock_t *ready = zpoller_wait (poller, 1000 * ZMQ_POLL_MSEC);
+        if (zpoller_terminated(poller))
             break;              //  Interrupted
 
         //  Handle incoming status messages
-        if (items [0].revents & ZMQ_POLLIN) {
+        if (ready == statefe) {
             char *peer_name = zstr_recv (statefe);
             char *available = zstr_recv (statefe);
             printf ("%s - %s workers free\n", peer_name, available);
@@ -57,6 +55,8 @@ int main (int argc, char *argv [])
             zstr_sendf (statebe, "%d", randof (10));
         }
     }
-    zctx_destroy (&ctx);
+    zpoller_destroy (&poller);
+    zsock_destroy (&statefe);
+    zsock_destroy (&statebe);
     return EXIT_SUCCESS;
 }
